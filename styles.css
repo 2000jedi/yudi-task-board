@@ -5,6 +5,7 @@
     height: 100%;
     overflow: auto;
     background-color: var(--background-secondary);
+    -webkit-overflow-scrolling: touch;
 }
 
 /* Header */
@@ -272,11 +273,34 @@
     .task-board {
         flex-direction: column;
         gap: 12px;
+        overflow-x: hidden;
     }
 
     .task-board-column {
-        flex: 1 1 auto;
-        width: 100%;
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        min-width: auto !important;
+    }
+
+    .task-board-column.hierarchical {
+        width: 100% !important;
+        min-width: auto !important;
+    }
+
+    .folder-section {
+        width: 100% !important;
+        min-width: auto !important;
+    }
+
+    .tags-container {
+        flex-wrap: wrap;
+        overflow-x: hidden;
+    }
+
+    .tag-group {
+        flex: 1 1 45%;
+        min-width: 150px;
+        max-width: none;
     }
 
     .task-board-header {
@@ -288,6 +312,16 @@
     .task-board-controls {
         width: 100%;
         flex-wrap: wrap;
+    }
+
+    .task-tag-filter {
+        max-height: 200px;
+        overflow-y: auto;
+    }
+
+    .tag-checkbox-container {
+        max-height: 150px;
+        overflow-y: auto;
     }
 }
 

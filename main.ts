@@ -1174,19 +1174,28 @@ class TaskBoardView extends ItemView {
             this.showStatusMenu(task, e);
         });
 
-        // Drag support
-        card.draggable = true;
-        card.addEventListener('dragstart', (e) => {
-            e.dataTransfer?.setData('text/plain', task.id);
-            e.dataTransfer?.setData('task/tag', task.tag);
-            e.dataTransfer?.setData('task/folder', task.folder);
-            card.classList.add('dragging');
-        });
-        card.addEventListener('dragend', () => {
-            card.classList.remove('dragging');
-            // Remove all drop-target highlights
-            document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
-        });
+        // Drag support (desktop only - HTML5 drag doesn't work well on mobile)
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (!isMobile) {
+            card.draggable = true;
+            card.addEventListener('dragstart', (e) => {
+                e.dataTransfer?.setData('text/plain', task.id);
+                e.dataTransfer?.setData('task/tag', task.tag);
+                e.dataTransfer?.setData('task/folder', task.folder);
+                card.classList.add('dragging');
+            });
+            card.addEventListener('dragend', () => {
+                card.classList.remove('dragging');
+                // Remove all drop-target highlights (safely)
+                try {
+                    if (typeof document !== 'undefined') {
+                        document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+                    }
+                } catch (e) {
+                    // Ignore document errors on mobile
+                }
+            });
+        }
     }
 
     showPriorityMenu(task: Task, element: HTMLElement, evt: MouseEvent) {

@@ -13,7 +13,8 @@ import {
     DropdownComponent,
     ButtonComponent,
     MarkdownRenderer,
-    Component
+    Component,
+    Modal
 } from 'obsidian';
 
 // Task interface
@@ -327,6 +328,147 @@ export default class TaskBoardPlugin extends Plugin {
         }
     }
 
+    // Update task tag
+    async updateTask(task: Task, newTag: string) {
+        try {
+            const content = await this.app.vault.read(task.file);
+            const frontmatterRegex = /^---\n([\s\S]*?)\n---/;
+            const match = content.match(frontmatterRegex);
+
+            if (match) {
+                let newFrontmatter = match[1];
+                newFrontmatter = newFrontmatter.replace(
+                    /tag:\s*\S+/,
+                    `tag: ${newTag}`
+                );
+                if (!newFrontmatter.includes('tag:')) {
+                    newFrontmatter = newFrontmatter.replace(
+                        /(status:[^\n]*)/,
+                        `$1\ntag: ${newTag}`
+                    );
+                }
+
+                const newContent = content.replace(frontmatterRegex, `---\n${newFrontmatter}\n---`);
+                await this.app.vault.modify(task.file, newContent);
+                task.tag = newTag;
+                new Notice(`Task tag changed to ${newTag}`);
+            }
+        } catch (error) {
+            console.error('Error updating task tag:', error);
+            new Notice('Failed to update task tag');
+        }
+    }
+
+    // Move task to different folder
+    async moveTaskToFolder(task: Task, targetFolder: TFolder) {
+        try {
+            const newPath = `${targetFolder.path}/${task.file.name}`;
+            await this.app.vault.rename(task.file, newPath);
+            new Notice(`Task moved to ${targetFolder.name}`);
+        } catch (error) {
+            console.error('Error moving task:', error);
+            new Notice('Failed to move task');
+        }
+    }
+
+    // Create a new task
+    async createNewTask(title: string, folderName: string, tag: string, priority: string = 'medium') {
+        try {
+            // Find the base tasks folder
+            const vault = this.app.vault;
+            const allFolders = vault.getAllLoadedFiles()
+                .filter(f => f instanceof TFolder) as TFolder[];
+            
+            let targetFolder: TFolder | null = null;
+            
+            // Find the tasks folder that contains this folder
+            for (const folder of allFolders) {
+                if (folder.name === folderName || folder.path.includes(`/${folderName}/`) || folder.path.endsWith(`/${folderName}`)) {
+                    // Check if this is a task folder
+                    const isTaskFolder = this.settings.taskFolders.some(tf => 
+                        folder.path === tf || 
+                        folder.path.endsWith('/' + tf) ||
+                        folder.name === tf
+                    );
+                    if (isTaskFolder || folder.path.includes('/tasks/')) {
+                        targetFolder = folder;
+                        break;
+                    }
+                }
+            }
+            
+            // Fallback: find any tasks folder
+            if (!targetFolder) {
+                for (const folder of allFolders) {
+                    if (this.settings.taskFolders.some(tf => 
+                        folder.name === tf || folder.path.endsWith('/' + tf)
+                    )) {
+                        targetFolder = folder;
+                        break;
+                    }
+                }
+            }
+
+            if (!targetFolder) {
+                new Notice('Could not find tasks folder');
+                return;
+            }
+
+            // Create folder for tag if it doesn't exist
+            const tagFolderPath = `${targetFolder.path}/${tag}`;
+            let tagFolder = vault.getAbstractFileByPath(tagFolderPath);
+            if (!tagFolder) {
+                await vault.createFolder(tagFolderPath);
+                tagFolder = vault.getAbstractFileByPath(tagFolderPath);
+            }
+
+            if (!(tagFolder instanceof TFolder)) {
+                new Notice('Error creating tag folder');
+                return;
+            }
+
+            // Generate filename from title
+            const filename = title.toLowerCase()
+                .replace(/[^a-z0-9\s-]/g, '')
+                .replace(/\s+/g, '-')
+                .substring(0, 50) || 'new-task';
+            
+            const filePath = `${tagFolderPath}/${filename}.md`;
+            
+            // Check if file exists and append number if needed
+            let finalPath = filePath;
+            let counter = 1;
+            while (vault.getAbstractFileByPath(finalPath)) {
+                finalPath = `${tagFolderPath}/${filename}-${counter}.md`;
+                counter++;
+            }
+
+            // Create task content
+            const content = `---
+status: todo
+tag: ${tag}
+priority: ${priority}
+---
+
+# ${title}
+
+`;
+
+            await vault.create(finalPath, content);
+            new Notice(`Task created: ${title}`);
+            this.refreshView();
+
+            // Open the new file
+            const newFile = vault.getAbstractFileByPath(finalPath);
+            if (newFile instanceof TFile) {
+                this.app.workspace.openLinkText(newFile.path, '');
+            }
+        } catch (error) {
+            console.error('Error creating task:', error);
+            new Notice('Failed to create task');
+        }
+    }
+
     // Organize all tasks by tag - moves files into subfolders named after their tags
     async organizeTasksByTag() {
         const tasks = await this.scanTasks();
@@ -618,6 +760,11 @@ class TaskBoardView extends ItemView {
         const tags = this.getAllTags();
         if (tags.length === 0) return;
 
+        // Auto-select all tags if none selected (default behavior)
+        if (this.selectedTags.size === 0) {
+            tags.forEach(tag => this.selectedTags.add(tag));
+        }
+
         this.tagFilterContainer = this.containerEl.createDiv({ cls: 'task-tag-filter' });
         
         const filterHeader = this.tagFilterContainer.createDiv({ cls: 'tag-filter-header' });
@@ -689,7 +836,9 @@ class TaskBoardView extends ItemView {
 
         // Filter tasks by selected tags
         let filteredTasks = this.tasks;
-        if (this.selectedTags.size > 0) {
+        const allTags = this.getAllTags();
+        // Only filter if not all tags are selected
+        if (this.selectedTags.size > 0 && this.selectedTags.size < allTags.length) {
             filteredTasks = this.tasks.filter(task => this.selectedTags.has(task.tag));
         }
 
@@ -710,17 +859,193 @@ class TaskBoardView extends ItemView {
             tasksByStatus.get(status)!.push(task);
         }
 
-        // Sort tasks within each column
-        for (const [status, tasks] of tasksByStatus) {
-            this.sortTasks(tasks);
-        }
-
         // Create columns (skip hidden statuses)
         for (const status of this.plugin.settings.statusOrder) {
             if (this.hiddenStatuses.has(status)) continue;
             const tasks = tasksByStatus.get(status) || [];
-            this.renderColumn(board, status, tasks);
+            
+            // For active columns (todo, in-progress), use hierarchical grouping
+            if (status === 'todo' || status === 'in-progress') {
+                this.renderHierarchicalColumn(board, status, tasks);
+            } else {
+                // Sort and render flat for done/archive columns
+                this.sortTasks(tasks);
+                this.renderColumn(board, status, tasks);
+            }
         }
+    }
+
+    // Group tasks by folder, then by tag
+    groupTasksHierarchically(tasks: Task[]): Map<string, Map<string, Task[]>> {
+        const folderGroups = new Map<string, Map<string, Task[]>>();
+
+        for (const task of tasks) {
+            const folder = task.folder || 'Uncategorized';
+            const tag = task.tag || 'untagged';
+
+            if (!folderGroups.has(folder)) {
+                folderGroups.set(folder, new Map());
+            }
+            const tagGroups = folderGroups.get(folder)!;
+
+            if (!tagGroups.has(tag)) {
+                tagGroups.set(tag, []);
+            }
+            tagGroups.get(tag)!.push(task);
+        }
+
+        // Sort tasks within each tag group
+        for (const [folder, tagGroups] of folderGroups) {
+            for (const [tag, tagTasks] of tagGroups) {
+                this.sortTasks(tagTasks);
+            }
+        }
+
+        return folderGroups;
+    }
+
+    renderHierarchicalColumn(board: HTMLElement, status: string, tasks: Task[]) {
+        const column = board.createDiv({ cls: 'task-board-column hierarchical' });
+        column.setAttribute('data-status', status);
+
+        // Group tasks hierarchically
+        const folderGroups = this.groupTasksHierarchically(tasks);
+
+        // Calculate dynamic width based on number of tags and folders
+        const columnWidth = this.calculateColumnWidth(folderGroups);
+        column.style.width = `${columnWidth}px`;
+        column.style.minWidth = `${columnWidth}px`;
+        column.style.flex = `0 0 ${columnWidth}px`;
+
+        // Column header with drop zone for status change
+        const header = column.createDiv({ cls: 'task-column-header' });
+        const statusLabel = this.getStatusLabel(status);
+        header.createEl('h3', { text: statusLabel, cls: `task-column-title status-${status}` });
+        header.createSpan({ text: `${tasks.length}`, cls: 'task-count' });
+        
+        // Make entire column a drop zone for status
+        this.setupDropZone(column, 'status', status);
+
+        // Tasks container with horizontal layout
+        const tasksContainer = column.createDiv({ cls: 'task-column-tasks hierarchical' });
+
+        // Sort folders alphabetically
+        const sortedFolders = Array.from(folderGroups.keys()).sort();
+
+        // Render each folder
+        for (const folderName of sortedFolders) {
+            const tagGroups = folderGroups.get(folderName)!;
+            // Calculate folder section width based on tags
+            const folderWidth = this.calculateFolderWidth(tagGroups);
+            this.renderFolderSection(tasksContainer, folderName, tagGroups, folderWidth, status);
+        }
+
+        // Empty state
+        if (tasks.length === 0) {
+            tasksContainer.createDiv({ cls: 'task-empty', text: 'No tasks' });
+        }
+    }
+
+    // Calculate optimal column width based on folder and tag counts
+    calculateColumnWidth(folderGroups: Map<string, Map<string, Task[]>>): number {
+        const TAG_WIDTH = 200;      // Width per tag group (including padding & border)
+        const TAG_GAP = 12;         // Gap between tags
+        const SECTION_PADDING = 48; // Folder section internal padding (16px * 2 + margin)
+        const COLUMN_PADDING = 48;  // Column content padding (12px * 2 + extra)
+        const MIN_WIDTH = 400;      // Minimum column width
+
+        let maxFolderWidth = 0;
+
+        // Calculate width for each folder (all tags in one line)
+        for (const [folder, tagGroups] of folderGroups) {
+            const tagCount = tagGroups.size;
+            // Account for tags, gaps between them, and container padding
+            const contentWidth = (tagCount * TAG_WIDTH) + ((tagCount - 1) * TAG_GAP);
+            const folderWidth = contentWidth + SECTION_PADDING;
+            maxFolderWidth = Math.max(maxFolderWidth, folderWidth);
+        }
+
+        // Return the width needed for the widest folder plus column padding
+        return Math.max(MIN_WIDTH, maxFolderWidth + COLUMN_PADDING);
+    }
+
+    // Calculate folder section width - matches column width calculation
+    calculateFolderWidth(tagGroups: Map<string, Task[]>): number {
+        const TAG_WIDTH = 200;
+        const TAG_GAP = 12;
+        const PADDING = 48;
+
+        const tagCount = tagGroups.size;
+        const contentWidth = (tagCount * TAG_WIDTH) + ((tagCount - 1) * TAG_GAP);
+        return contentWidth + PADDING;
+    }
+
+    renderFolderSection(container: HTMLElement, folderName: string, tagGroups: Map<string, Task[]>, width?: number, status?: string) {
+        const folderSection = container.createDiv({ cls: 'folder-section' });
+        folderSection.setAttribute('data-folder', folderName);
+        
+        // Apply calculated width if provided
+        if (width && width > 0) {
+            folderSection.style.width = `${width}px`;
+            folderSection.style.minWidth = `${width}px`;
+        }
+
+        // Folder header with drop indicator and + button
+        const folderHeader = folderSection.createDiv({ cls: 'folder-header' });
+        const folderTitleContainer = folderHeader.createDiv({ cls: 'folder-title-container' });
+        folderTitleContainer.createEl('h4', { text: folderName, cls: 'folder-title' });
+        
+        // Add "+" button next to folder name
+        const addTagBtn = folderTitleContainer.createEl('button', {
+            cls: 'add-tag-btn-header',
+            text: '+',
+            attr: { title: 'Add new tag' }
+        });
+        addTagBtn.addEventListener('click', () => {
+            this.showNewTagDialog(folderName);
+        });
+        
+        const totalTasks = Array.from(tagGroups.values()).reduce((sum, tasks) => sum + tasks.length, 0);
+        folderHeader.createSpan({ text: `${totalTasks}`, cls: 'folder-count' });
+
+        // Horizontal container for tag groups
+        const tagsContainer = folderSection.createDiv({ cls: 'tags-container' });
+
+        // Sort tags alphabetically
+        const sortedTags = Array.from(tagGroups.keys()).sort();
+
+        // Render each tag group
+        for (const tag of sortedTags) {
+            const tasks = tagGroups.get(tag)!;
+            this.renderTagGroup(tagsContainer, folderName, tag, tasks);
+        }
+    }
+
+    renderTagGroup(container: HTMLElement, folderName: string, tag: string, tasks: Task[]) {
+        const tagGroup = container.createDiv({ cls: 'tag-group' });
+        tagGroup.setAttribute('data-tag', tag);
+
+        // Tag header
+        const tagHeader = tagGroup.createDiv({ cls: 'tag-header' });
+        tagHeader.createSpan({ text: tag, cls: 'tag-group-name' });
+        tagHeader.createSpan({ text: `${tasks.length}`, cls: 'tag-group-count' });
+
+        // Tasks in this tag group with drop zone for tag changes
+        const tasksContainer = tagGroup.createDiv({ cls: 'tag-tasks' });
+        this.setupDropZone(tasksContainer, 'tag', tag);
+
+        for (const task of tasks) {
+            this.renderTaskCard(tasksContainer, task);
+        }
+
+        // "New" button at the end of tag group
+        const newTaskBtn = tagGroup.createEl('button', {
+            cls: 'new-task-btn',
+            text: 'New'
+        });
+        newTaskBtn.addEventListener('click', () => {
+            this.showNewTaskDialog(folderName, tag);
+        });
     }
 
     sortTasks(tasks: Task[]) {
@@ -761,8 +1086,9 @@ class TaskBoardView extends ItemView {
         header.createEl('h3', { text: statusLabel, cls: `task-column-title status-${status}` });
         header.createSpan({ text: `${tasks.length}`, cls: 'task-count' });
 
-        // Tasks container
+        // Tasks container with drop zone
         const tasksContainer = column.createDiv({ cls: 'task-column-tasks' });
+        this.setupDropZone(tasksContainer, 'status', status);
 
         // Render tasks
         for (const task of tasks) {
@@ -770,8 +1096,48 @@ class TaskBoardView extends ItemView {
         }
     }
 
+    // Setup drop zone for drag and drop
+    setupDropZone(element: HTMLElement, type: 'status' | 'tag' | 'folder', value: string, folder?: TFolder) {
+        element.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            element.classList.add('drop-target');
+        });
+
+        element.addEventListener('dragleave', () => {
+            element.classList.remove('drop-target');
+        });
+
+        element.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            element.classList.remove('drop-target');
+
+            const taskId = e.dataTransfer?.getData('text/plain');
+            if (!taskId) return;
+
+            const task = this.tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            // Prevent dropping on same location
+            if (type === 'status' && task.status === value) return;
+            if (type === 'tag' && task.tag === value) return;
+            if (type === 'folder' && folder && task.file.parent?.path === folder.path) return;
+
+            // Perform the move
+            if (type === 'status') {
+                await this.plugin.updateTaskStatus(task, value);
+            } else if (type === 'tag') {
+                await this.plugin.updateTask(task, value);
+            } else if (type === 'folder' && folder) {
+                await this.plugin.moveTaskToFolder(task, folder);
+            }
+
+            this.refresh();
+        });
+    }
+
     renderTaskCard(container: HTMLElement, task: Task) {
         const card = container.createDiv({ cls: `task-card priority-${task.priority}` });
+        card.setAttribute('data-task-id', task.id);
 
         // Priority indicator
         const priorityDot = card.createDiv({ cls: `task-priority priority-${task.priority}` });
@@ -812,10 +1178,14 @@ class TaskBoardView extends ItemView {
         card.draggable = true;
         card.addEventListener('dragstart', (e) => {
             e.dataTransfer?.setData('text/plain', task.id);
+            e.dataTransfer?.setData('task/tag', task.tag);
+            e.dataTransfer?.setData('task/folder', task.folder);
             card.classList.add('dragging');
         });
         card.addEventListener('dragend', () => {
             card.classList.remove('dragging');
+            // Remove all drop-target highlights
+            document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
         });
     }
 
@@ -863,6 +1233,170 @@ class TaskBoardView extends ItemView {
             'archive': 'Archive'
         };
         return labels[status] || status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    // Show dialog to create a new task in a specific folder and tag
+    showNewTaskDialog(folderName: string, tag: string) {
+        const modal = new NewTaskModal(this.app, folderName, tag, (title, folder, taskTag, priority) => {
+            this.plugin.createNewTask(title, folder, taskTag, priority);
+        });
+        modal.open();
+    }
+
+    // Show dialog to create a new tag with a TODO item
+    showNewTagDialog(folderName: string) {
+        const modal = new NewTagModal(this.app, folderName, (tagName, title, priority) => {
+            this.plugin.createNewTask(title, folderName, tagName, priority);
+        });
+        modal.open();
+    }
+}
+
+// Modal for creating a new task
+class NewTaskModal extends Modal {
+    folder: string;
+    tag: string;
+    onSubmit: (title: string, folder: string, tag: string, priority: string) => void;
+
+    constructor(app: App, folder: string, tag: string, onSubmit: (title: string, folder: string, tag: string, priority: string) => void) {
+        super(app);
+        this.folder = folder;
+        this.tag = tag;
+        this.onSubmit = onSubmit;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl('h2', { text: 'Create New Task' });
+
+        // Title input
+        contentEl.createEl('label', { text: 'Task Title:' });
+        const titleInput = contentEl.createEl('input', {
+            type: 'text',
+            placeholder: 'Enter task title...'
+        });
+        titleInput.style.width = '100%';
+        titleInput.style.marginBottom = '16px';
+
+        // Folder info
+        contentEl.createEl('label', { text: 'Folder:' });
+        contentEl.createEl('div', { text: this.folder, cls: 'new-task-info' });
+
+        // Tag info
+        contentEl.createEl('label', { text: 'Tag:' });
+        contentEl.createEl('div', { text: this.tag, cls: 'new-task-info' });
+
+        // Priority selection
+        contentEl.createEl('label', { text: 'Priority:' });
+        const prioritySelect = contentEl.createEl('select');
+        prioritySelect.style.width = '100%';
+        prioritySelect.style.marginBottom = '16px';
+        ['high', 'medium', 'low'].forEach(p => {
+            const option = prioritySelect.createEl('option', { text: p, value: p });
+            if (p === 'medium') option.selected = true;
+        });
+
+        // Buttons
+        const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+
+        const submitBtn = buttonContainer.createEl('button', {
+            text: 'Create',
+            cls: 'mod-cta'
+        });
+        submitBtn.addEventListener('click', () => {
+            const title = titleInput.value.trim();
+            if (title) {
+                this.onSubmit(title, this.folder, this.tag, prioritySelect.value);
+                this.close();
+            }
+        });
+
+        const cancelBtn = buttonContainer.createEl('button', { text: 'Cancel' });
+        cancelBtn.addEventListener('click', () => this.close());
+
+        // Focus title input
+        titleInput.focus();
+    }
+
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
+    }
+}
+
+// Modal for creating a new tag
+class NewTagModal extends Modal {
+    folder: string;
+    onSubmit: (tagName: string, title: string, priority: string) => void;
+
+    constructor(app: App, folder: string, onSubmit: (tagName: string, title: string, priority: string) => void) {
+        super(app);
+        this.folder = folder;
+        this.onSubmit = onSubmit;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.createEl('h2', { text: 'Create New Tag with Task' });
+
+        // Tag name input
+        contentEl.createEl('label', { text: 'Tag Name:' });
+        const tagInput = contentEl.createEl('input', {
+            type: 'text',
+            placeholder: 'Enter new tag name...'
+        });
+        tagInput.style.width = '100%';
+        tagInput.style.marginBottom = '16px';
+
+        // Task title input
+        contentEl.createEl('label', { text: 'Task Title:' });
+        const titleInput = contentEl.createEl('input', {
+            type: 'text',
+            placeholder: 'Enter task title...'
+        });
+        titleInput.style.width = '100%';
+        titleInput.style.marginBottom = '16px';
+
+        // Folder info
+        contentEl.createEl('label', { text: 'Folder:' });
+        contentEl.createEl('div', { text: this.folder, cls: 'new-task-info' });
+
+        // Priority selection
+        contentEl.createEl('label', { text: 'Priority:' });
+        const prioritySelect = contentEl.createEl('select');
+        prioritySelect.style.width = '100%';
+        prioritySelect.style.marginBottom = '16px';
+        ['high', 'medium', 'low'].forEach(p => {
+            const option = prioritySelect.createEl('option', { text: p, value: p });
+            if (p === 'medium') option.selected = true;
+        });
+
+        // Buttons
+        const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container' });
+
+        const submitBtn = buttonContainer.createEl('button', {
+            text: 'Create',
+            cls: 'mod-cta'
+        });
+        submitBtn.addEventListener('click', () => {
+            const tagName = tagInput.value.trim().toLowerCase().replace(/\s+/g, '-');
+            const title = titleInput.value.trim();
+            if (tagName && title) {
+                this.onSubmit(tagName, title, prioritySelect.value);
+                this.close();
+            }
+        });
+
+        const cancelBtn = buttonContainer.createEl('button', { text: 'Cancel' });
+        cancelBtn.addEventListener('click', () => this.close());
+
+        // Focus tag input
+        tagInput.focus();
+    }
+
+    onClose() {
+        const { contentEl } = this;
+        contentEl.empty();
     }
 }
 

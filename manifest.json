@@ -1,0 +1,9 @@
+{
+	"id": "task-board",
+	"name": "Task Board",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "A Kanban-style task board that reads tasks from 'tasks' folders across your vault. Supports status, tags, priority, and sorting.",
+	"author": "Custom",
+	"isDesktopOnly": false
+}

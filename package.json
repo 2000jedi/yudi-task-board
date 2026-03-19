@@ -1,0 +1,19 @@
+{
+  "name": "task-board",
+  "version": "1.0.0",
+  "description": "A Kanban-style task board for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": ["obsidian", "plugin", "tasks", "kanban"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "obsidian": "^1.4.11",
+    "tslib": "^2.6.0",
+    "typescript": "^5.0.0"
+  }
+}

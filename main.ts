@@ -36,6 +36,7 @@ interface TaskBoardSettings {
     sortBy: 'priority' | 'tag' | 'title' | 'folder';
     sortDirection: 'asc' | 'desc';
     organizeByTag: boolean;
+    hiddenStatuses: string[];
 }
 
 const DEFAULT_SETTINGS: TaskBoardSettings = {
@@ -44,7 +45,8 @@ const DEFAULT_SETTINGS: TaskBoardSettings = {
     defaultStatus: 'todo',
     sortBy: 'priority',
     sortDirection: 'desc',
-    organizeByTag: false
+    organizeByTag: false,
+    hiddenStatuses: []
 };
 
 const VIEW_TYPE_TASK_BOARD = 'task-board-view';
@@ -443,10 +445,13 @@ class TaskBoardView extends ItemView {
     sortSelect: DropdownComponent;
     selectedTags: Set<string> = new Set();
     tagFilterContainer: HTMLElement | null = null;
+    hiddenStatuses: Set<string> = new Set();
 
     constructor(leaf: WorkspaceLeaf, plugin: TaskBoardPlugin) {
         super(leaf);
         this.plugin = plugin;
+        // Initialize hidden statuses from settings
+        this.hiddenStatuses = new Set(this.plugin.settings.hiddenStatuses || []);
     }
 
     getViewType(): string {
@@ -516,6 +521,48 @@ class TaskBoardView extends ItemView {
             this.plugin.settings.sortDirection = 
                 this.plugin.settings.sortDirection === 'asc' ? 'desc' : 'asc';
             dirBtn.textContent = this.plugin.settings.sortDirection === 'asc' ? '↑' : '↓';
+            this.plugin.saveSettings();
+            this.renderBoard();
+        });
+
+        // Column visibility toggles
+        const visibilityControls = controls.createDiv({ cls: 'task-board-visibility' });
+        visibilityControls.createSpan({ text: 'Show: ', cls: 'task-board-label' });
+
+        // Toggle for Done column
+        const doneLabel = visibilityControls.createEl('label', { cls: 'visibility-toggle' });
+        const doneCheckbox = doneLabel.createEl('input', {
+            type: 'checkbox',
+            cls: 'visibility-checkbox'
+        });
+        doneCheckbox.checked = !this.hiddenStatuses.has('done');
+        doneLabel.createSpan({ text: 'Done', cls: 'visibility-text' });
+        doneCheckbox.addEventListener('change', () => {
+            if (doneCheckbox.checked) {
+                this.hiddenStatuses.delete('done');
+            } else {
+                this.hiddenStatuses.add('done');
+            }
+            this.plugin.settings.hiddenStatuses = Array.from(this.hiddenStatuses);
+            this.plugin.saveSettings();
+            this.renderBoard();
+        });
+
+        // Toggle for Archive column
+        const archiveLabel = visibilityControls.createEl('label', { cls: 'visibility-toggle' });
+        const archiveCheckbox = archiveLabel.createEl('input', {
+            type: 'checkbox',
+            cls: 'visibility-checkbox'
+        });
+        archiveCheckbox.checked = !this.hiddenStatuses.has('archive');
+        archiveLabel.createSpan({ text: 'Archive', cls: 'visibility-text' });
+        archiveCheckbox.addEventListener('change', () => {
+            if (archiveCheckbox.checked) {
+                this.hiddenStatuses.delete('archive');
+            } else {
+                this.hiddenStatuses.add('archive');
+            }
+            this.plugin.settings.hiddenStatuses = Array.from(this.hiddenStatuses);
             this.plugin.saveSettings();
             this.renderBoard();
         });
@@ -668,8 +715,9 @@ class TaskBoardView extends ItemView {
             this.sortTasks(tasks);
         }
 
-        // Create columns
+        // Create columns (skip hidden statuses)
         for (const status of this.plugin.settings.statusOrder) {
+            if (this.hiddenStatuses.has(status)) continue;
             const tasks = tasksByStatus.get(status) || [];
             this.renderColumn(board, status, tasks);
         }

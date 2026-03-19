@@ -329,6 +329,42 @@
     border-color: var(--interactive-accent);
 }
 
+/* Visibility Toggles */
+.task-board-visibility {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: var(--background-primary);
+    border-radius: 4px;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.visibility-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.visibility-toggle:hover {
+    background: var(--background-modifier-hover);
+}
+
+.visibility-checkbox {
+    cursor: pointer;
+    margin: 0;
+}
+
+.visibility-text {
+    color: var(--text-muted);
+    user-select: none;
+}
+
 /* Clear Filters Button */
 .task-board-clear-filters {
     background: var(--color-red);

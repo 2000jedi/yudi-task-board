@@ -222,18 +222,36 @@ export default class TaskBoardPlugin extends Plugin {
             const cache = this.app.metadataCache.getFileCache(file);
             const frontmatter = cache?.frontmatter;
 
-            // Read file content for title (first line or h1)
+            // Read file content for title (first # heading)
             const content = await this.app.vault.read(file);
             let title = file.basename;
             
-            // Try to find a better title from content
+            // Try to find a # heading from content (skip frontmatter)
             const lines = content.split('\n');
+            let inFrontmatter = false;
+            let frontmatterEnded = false;
+            
             for (const line of lines) {
                 const trimmed = line.trim();
-                if (trimmed && !trimmed.startsWith('---')) {
-                    if (trimmed.startsWith('# ')) {
-                        title = trimmed.substring(2).trim();
+                
+                // Track frontmatter state
+                if (trimmed === '---') {
+                    if (!inFrontmatter) {
+                        inFrontmatter = true;
+                        continue;
+                    } else {
+                        inFrontmatter = false;
+                        frontmatterEnded = true;
+                        continue;
                     }
+                }
+                
+                // Skip lines inside frontmatter
+                if (inFrontmatter) continue;
+                
+                // Look for # heading after frontmatter
+                if (trimmed.startsWith('# ')) {
+                    title = trimmed.substring(2).trim();
                     break;
                 }
             }

@@ -677,15 +677,13 @@ class TaskBoardView extends ItemView {
         // Search icon
         const searchIcon = searchContainer.createSpan({ cls: 'task-search-icon', text: '🔍' });
         
-        // Debounced search
+        // Real-time search with minimal debounce
         let debounceTimer: number;
         searchInput.addEventListener('input', (e) => {
             clearTimeout(debounceTimer);
-            debounceTimer = window.setTimeout(() => {
-                this.searchQuery = searchInput.value;
-                this.applyFilters();
-                this.renderBoard();
-            }, 300);
+            this.searchQuery = searchInput.value;
+            this.applyFilters();
+            this.renderBoard();
         });
         
         // Clear button (visible when search has text)

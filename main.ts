@@ -583,11 +583,14 @@ priority: ${priority}
 class TaskBoardView extends ItemView {
     plugin: TaskBoardPlugin;
     tasks: Task[] = [];
+    filteredTasks: Task[] = [];
     containerEl: HTMLElement;
     sortSelect: DropdownComponent;
     selectedTags: Set<string> = new Set();
     tagFilterContainer: HTMLElement | null = null;
     hiddenStatuses: Set<string> = new Set();
+    searchQuery: string = '';
+    searchInput: HTMLInputElement | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: TaskBoardPlugin) {
         super(leaf);
@@ -615,7 +618,32 @@ class TaskBoardView extends ItemView {
 
     async refresh() {
         this.tasks = await this.plugin.scanTasks();
+        this.applyFilters();
         this.render();
+    }
+
+    // Apply search and tag filters to tasks
+    applyFilters() {
+        let result = this.tasks;
+
+        // Apply search query filter
+        if (this.searchQuery.trim()) {
+            const query = this.searchQuery.toLowerCase();
+            result = result.filter(task => {
+                const titleMatch = task.title.toLowerCase().includes(query);
+                const tagMatch = task.tag.toLowerCase().includes(query);
+                const contentMatch = task.content.toLowerCase().includes(query);
+                return titleMatch || tagMatch || contentMatch;
+            });
+        }
+
+        // Apply tag filter (only if not all tags selected)
+        const allTags = this.getAllTags();
+        if (this.selectedTags.size > 0 && this.selectedTags.size < allTags.length) {
+            result = result.filter(task => this.selectedTags.has(task.tag));
+        }
+
+        this.filteredTasks = result;
     }
 
     render() {
@@ -636,6 +664,42 @@ class TaskBoardView extends ItemView {
 
         // Title
         header.createEl('h2', { text: 'Task Board', cls: 'task-board-title' });
+
+        // Search bar
+        const searchContainer = header.createDiv({ cls: 'task-search-container' });
+        const searchInput = searchContainer.createEl('input', {
+            type: 'text',
+            placeholder: 'Search tasks...',
+            cls: 'task-search-input'
+        });
+        searchInput.value = this.searchQuery;
+        
+        // Search icon
+        const searchIcon = searchContainer.createSpan({ cls: 'task-search-icon', text: '🔍' });
+        
+        // Debounced search
+        let debounceTimer: number;
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(debounceTimer);
+            debounceTimer = window.setTimeout(() => {
+                this.searchQuery = searchInput.value;
+                this.applyFilters();
+                this.renderBoard();
+            }, 300);
+        });
+        
+        // Clear button (visible when search has text)
+        if (this.searchQuery) {
+            const clearSearchBtn = searchContainer.createEl('button', {
+                cls: 'task-search-clear',
+                text: '✕'
+            });
+            clearSearchBtn.addEventListener('click', () => {
+                this.searchQuery = '';
+                this.applyFilters();
+                this.render();
+            });
+        }
 
         // Controls
         const controls = header.createDiv({ cls: 'task-board-controls' });
@@ -817,6 +881,7 @@ class TaskBoardView extends ItemView {
                 } else {
                     this.selectedTags.delete(tag);
                 }
+                this.applyFilters();
                 this.renderBoard();
                 // Update clear button visibility
                 const clearBtn = this.containerEl.querySelector('.task-board-clear-filters') as HTMLElement;
@@ -834,13 +899,8 @@ class TaskBoardView extends ItemView {
 
         const board = this.containerEl.createDiv({ cls: 'task-board' });
 
-        // Filter tasks by selected tags
-        let filteredTasks = this.tasks;
-        const allTags = this.getAllTags();
-        // Only filter if not all tags are selected
-        if (this.selectedTags.size > 0 && this.selectedTags.size < allTags.length) {
-            filteredTasks = this.tasks.filter(task => this.selectedTags.has(task.tag));
-        }
+        // Use pre-filtered tasks (search + tag filters already applied)
+        const tasksToRender = this.filteredTasks;
 
         // Group tasks by status
         const tasksByStatus = new Map<string, Task[]>();
@@ -851,7 +911,7 @@ class TaskBoardView extends ItemView {
         }
 
         // Group tasks
-        for (const task of filteredTasks) {
+        for (const task of tasksToRender) {
             const status = task.status || this.plugin.settings.defaultStatus;
             if (!tasksByStatus.has(status)) {
                 tasksByStatus.set(status, []);
